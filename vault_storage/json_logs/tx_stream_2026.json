@@ -1,0 +1,22 @@
+[
+  {
+    "transaction_id": "TXN-90812-X",
+    "timestamp": "2026-09-12T10:14:22Z",
+    "account_source": "ACC-7741",
+    "amount_usd": 45000.00,
+    "currency": "USD",
+    "merchant_category": "Cloud Infrastructure B2B",
+    "risk_score": 0.12,
+    "system_flags": ["AUTO_APPROVED", "VPC_ORIGIN"]
+  },
+  {
+    "transaction_id": "TXN-90813-Y",
+    "timestamp": "2026-09-12T10:15:01Z",
+    "account_source": "ACC-2290",
+    "amount_usd": 125000.00,
+    "currency": "USD",
+    "merchant_category": "Unverified Offshore Consulting",
+    "risk_score": 0.89,
+    "system_flags": ["MANUAL_REVIEW_REQ", "HIGH_VOLUME_ANOMALY"]
+  }
+]

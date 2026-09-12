@@ -1,0 +1,3 @@
+record_id,audit_date,entity_code,ledger_type,balance_impact_usd,compliance_status
+REC-001,2026-09-11,ENT-INDIA-04,DEBIT,-12000.00,COMPLIANT
+REC-003,2026-09-12,ENT-CA-09,DEBIT,-89000.00,NON_COMPLIANT_MISSING_INVOICE
