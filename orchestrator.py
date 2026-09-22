@@ -3,6 +3,8 @@ import sqlite3
 import logging
 import redis
 import redis.asyncio
+from state_memory import AgentStateMemory
+
 
 # Setup Global Logging Configs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
@@ -53,10 +55,11 @@ async def initialize_system_infrastructure():
     await client.ping()
     logger.info("⚡ [ASYNC REDIS SUCCESS]: Non-blocking connection pool handshaked with afaos_state_ledger.")
 
-async def run_persistent_orchestrator(workflow_id: str, routing_matrix: dict):
+async def run_persistent_orchestrator(workflow_id: str, routing_matrix: dict, state_memory: AgentStateMemory):
     """Executes the pipeline nodes sequentially and wires in real physical tools."""
     logger.info(f"Launching Persistent Orchestration Engine Layer for Workflow: {workflow_id}")
     client = redis.asyncio.Redis(connection_pool=global_redis_pool)
+
     
     for key, agent in routing_matrix.items():
         current_checkpoint = await client.get(f"workflow:{workflow_id}:{key}")
@@ -64,8 +67,15 @@ async def run_persistent_orchestrator(workflow_id: str, routing_matrix: dict):
             logger.info(f"Checkpoint match found! Key [{key}] skipped inside tracking cache.")
             continue
             
-        logger.info(f"Firing Event Loop execution frame -> Key: [{key}] utilizing Agent: [{agent}]")
+            logger.info(f"Firing Event Loop execution frame -> Key: [{key}] utilizing Agent: [{agent}]")
         
+        # Day 14 Integration: Save the agent's live running status to Redis
+        state_memory.set_agent_state(
+            session_id=workflow_id,
+            agent_role=str(key),
+            state_data={"agent_type": str(agent), "status": "RUNNING", "current_step": "executing_node_logic"}
+        )
+
         if key == "Ingestion_Node":
             target_path = "vault_storage/csv_records/regulatory_ledger.csv"
             ledger_contents = tool_manager.execute_tool("read_financial_ledger", file_path=target_path)
@@ -164,8 +174,21 @@ def parse_json_audit_payload(raw_json: str) -> dict:
 async def main():
     await initialize_system_infrastructure()
     async with SystemLifecycleContext():
+        # Setup the connection to the Redis Docker container
+        state_memory = AgentStateMemory()
+        
         relational_workflow_uuid = "fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
-        await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX)
+        
+        # Save the system's starting state into memory
+        state_memory.set_agent_state(
+            session_id=relational_workflow_uuid,
+            agent_role="System_Orchestrator_Core",
+            state_data={"status": "initializing_workflow_loop", "matrix_ready": True}
+        )
+        
+        # Run the main orchestrator system loop
+                # Run the main orchestrator system loop with Day 14 state memory tracking
+        await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory)
 
 if __name__ == "__main__":
     asyncio.run(main())
