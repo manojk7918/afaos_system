@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime
 
-# Core System Engine Integrations (Day 18 - Day 24)
+# Core System Engine Integrations (Day 18 - Day 25)
 from dist_lock import RedisDistributedLock
 from state_memory import AgentStateMemory
 from event_broker import RedisEventBroker
@@ -21,11 +21,11 @@ logger = logging.getLogger(__name__)
 SYSTEM_ROUTING_MATRIX = ["Ingestion_Node", "Vector_Indexing_Node", "Analysis_Agent_Node", "Cloud_Dispatch_Node"]
 
 async def pattern_event_callback(event_envelope: dict):
-    """Day 23 Event Callback handler."""
+    """Day 23 Wildcard Pattern Callback handler."""
     print(f"📡 [PATTERN MATCH INTERCEPTED]: {event_envelope.get('event_type')} from {event_envelope.get('source_node')}")
 
 async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memory, event_broker, metrics_exporter, compactor):
-    """Processes node execution graphs while dual-streaming state metrics to Pub/Sub and Redis Streams."""
+    """Processes node graphs while streaming structured records into load-balanced stream matrices."""
     logger.info(f"Launching Persistent Orchestration Engine Layer for Workflow: {workflow_uuid}")
     
     for node in routing_matrix:
@@ -43,7 +43,6 @@ async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memor
             print("🔄 [STATE REVERSAL]: Active node transactional state cleanly reverted to parent ledger checkpoints.\n")
             continue
             
-        # Day 24: This publish call now automatically broadcasts to Pub/Sub AND appends to the Redis Stream ledger
         await event_broker.publish_event(
             topic=node,
             event_type="NODE_EXECUTION_START",
@@ -101,13 +100,16 @@ async def main():
         async with RedisDistributedLock(redis_runtime_client, relational_workflow_uuid, lease_time_sec=60):
             logger.info("🔒 [CONCURRENCY GUARD ACTIVE]: System execution context locked cleanly.")
             
+            # Day 25: Initialize the load-balancing group layers inside the stream topology
+            await event_broker.initialize_consumer_group()
+            
             await event_broker.start_pattern_listener("afaos:events:*", pattern_event_callback)
             await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory, event_broker, metrics_exporter, compactor)
             
             await asyncio.sleep(0.2)
             await event_broker.stop_pattern_listener()
             
-            # Day 21 Live Compilation Metrics Dashboard
+            # Day 21 Live Metrics Dashboard
             dashboard = await metrics_exporter.fetch_live_dashboard_aggregations()
             print("\n🖥️  --- Day 21 Real-Time Performance Dashboard Metrics ---")
             print(json.dumps(dashboard, indent=2))
@@ -116,14 +118,20 @@ async def main():
             print("\n🧹 --- Day 22 Memory Footprint Log Compaction Sweep ---")
             await compactor.compact_historical_logs(retention_seconds=5)
             
-            # Day 24 Stream Ledger Replay: Query the historical ledger to verify permanent event logs
-            print("\n🎞️  --- Day 24 Persistent Redis Stream Ledger Historical Replay Dumps ---")
-            history = await event_broker.replay_historical_events(start_id="-")
-            print(f"Total Persistent Stream Ledger Records Recovered: {len(history)}")
-            if history:
-                # Print the last recorded entry to confirm structure validity
-                print("Latest Replayed Record Structure Detail:")
-                print(json.dumps(history[-1], indent=2))
+            # Day 25 Distributed Load Balancer Verification:
+            # We spin up two distinct virtual consumers to read concurrently from the shared group line
+            print("\n👥 --- Day 25 Parallel Consumer Group Event Allocation ---")
+            
+            alpha_tasks = await event_broker.read_from_consumer_group(consumer_name="Worker_Alpha", count=2)
+            beta_tasks = await event_broker.read_from_consumer_group(consumer_name="Worker_Beta", count=2)
+            
+            print(f"🛠️ [Worker_Alpha] processing load-balanced events: {len(alpha_tasks)}")
+            for task in alpha_tasks:
+                print(f"   ├─ ID: {task['message_id']} | Type: {task['data']['event_type']} from {task['data']['source_node']}")
+                
+            print(f"🛠️ [Worker_Beta] processing load-balanced events: {len(beta_tasks)}")
+            for task in beta_tasks:
+                print(f"   ├─ ID: {task['message_id']} | Type: {task['data']['event_type']} from {task['data']['source_node']}")
             
     except RuntimeError as lock_err:
         print(f"\n🛑 [ABORT]: Critical concurrency conflict encountered: {lock_err}")
