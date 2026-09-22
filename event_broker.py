@@ -8,9 +8,10 @@ logger = logging.getLogger(__name__)
 
 class RedisEventBroker:
     def __init__(self, redis_client):
-        """Initializes the Event-Driven Pub/Sub Broker with adaptive type discovery."""
+        """Initializes the Event-Driven Pub/Sub Broker with adaptive type discovery and Day 20 DLQ structures."""
         self.redis_client = redis_client
         self.broadcast_channel = "afaos:events:broadcast"
+        self.dlq_key = "afaos:queue:dead_letter"
         self._listener_task = None
         self._is_listening = False
 
@@ -34,7 +35,6 @@ class RedisEventBroker:
             serialized_data = json.dumps(event_envelope)
             specific_channel = f"afaos:events:{topic}"
             
-            # Day 19 Fix: Separately invoke publish loops to bypass async gather type errors
             await self._safe_execute(self.redis_client.publish, specific_channel, serialized_data)
             await self._safe_execute(self.redis_client.publish, self.broadcast_channel, serialized_data)
             
@@ -43,6 +43,34 @@ class RedisEventBroker:
         except Exception as err:
             logger.error(f"❌ [PUB ERROR]: Failed to serialize or stream event metadata packet: {err}")
             return False
+
+    async def handle_dead_letter(self, failed_node: str, error_message: str, original_payload: dict):
+        """
+        Day 20 Feature: Enqueues toxic payloads into the persistent Redis Dead-Letter Queue (DLQ)
+        list and fires off an unhandled crash recovery broadcast alert event.
+        """
+        dlq_envelope = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "failed_node": failed_node,
+            "error_reason": error_message,
+            "poison_data": original_payload
+        }
+        
+        try:
+            serialized_dlq = json.dumps(dlq_envelope)
+            # Push into a Redis List (LPUSH) acting as our persistent Dead-Letter Queue stack
+            await self._safe_execute(self.redis_client.lpush, self.dlq_key, serialized_dlq)
+            logger.warning(f"🚨 [DLQ ENQUEUED]: Toxic execution packet for [{failed_node}] isolated in dead-letter storage.")
+            
+            # Broadcast the crash recovery signal across the agent fleet
+            await self.publish_event(
+                topic="Recovery_Engine",
+                event_type="NODE_CRASH_RECOVERY_TRIGGERED",
+                source_node="DLQ_Safety_Guard",
+                payload={"targeted_fallback_node": failed_node, "action": "state_rollback_initiated"}
+            )
+        except Exception as dlq_err:
+            logger.error(f"❌ [DLQ CRITICAL ERROR]: Failed to quarantine poison layout metrics: {dlq_err}")
 
     async def _listen_loop(self, pubsub_instance, callback_func):
         """Internal background consumer extraction loop parsing incoming data packets."""
@@ -75,7 +103,6 @@ class RedisEventBroker:
 
         try:
             pubsub = self.redis_client.pubsub()
-            # Day 19 Fix: Safely invoke subscribe context boundary without blocking on raw returns
             await self._safe_execute(pubsub.subscribe, channel_target)
             
             self._is_listening = True

@@ -4,7 +4,7 @@ import uuid
 import os
 from datetime import datetime
 
-# Day 18 & 19 Core Engine Integrations
+# Core System Engine Integrations
 from dist_lock import RedisDistributedLock
 from state_memory import AgentStateMemory
 from event_broker import RedisEventBroker
@@ -17,21 +17,30 @@ logger = logging.getLogger(__name__)
 SYSTEM_ROUTING_MATRIX = ["Ingestion_Node", "Vector_Indexing_Node", "Analysis_Agent_Node", "Cloud_Dispatch_Node"]
 
 async def system_event_callback(event_envelope: dict):
-    """
-    Day 19 Hook: Non-blocking callback that triggers every time an event 
-    is caught inside our background subscription rooms.
-    """
+    """Callback that logs event interceptions, including Day 20 crash responses."""
     print(f"\n📡 [EVENT INTERCEPTED] @ {event_envelope.get('timestamp')}")
     print(f" ├─ Source Node: {event_envelope.get('source_node')}")
     print(f" ├─ Event Type:  {event_envelope.get('event_type')}")
     print(f" └─ Payload:     {event_envelope.get('payload')}\n")
 
 async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memory, event_broker):
-    """Processes the system execution loops while broadcasting active node heartbeats."""
+    """Processes system execution loops and simulates crash isolation rules if anomalies are caught."""
     logger.info(f"Launching Persistent Orchestration Engine Layer for Workflow: {workflow_uuid}")
     
     for node in routing_matrix:
-        # Day 19 Update: Stream state change to specific and broadcast rooms before handling execution
+        # Day 20 Simulation Hook: Intentionally crash the Analysis node to trigger crash quarantine procedures
+        if node == "Analysis_Agent_Node":
+            logger.error(f"💥 [CRITICAL FAILURE]: '{node}' dropped database connectivity sockets unexpectedly!")
+            
+            # Trap the error execution layout context, store into DLQ, and trigger rollbacks
+            await event_broker.handle_dead_letter(
+                failed_node=node,
+                error_message="Database socket connection dropped unexpectedly during aggregations.",
+                original_payload={"target_node": node, "session_id": workflow_uuid, "attempt": 1}
+            )
+            print("\n🔄 [STATE REVERSAL]: Active node transactional state cleanly reverted to parent ledger checkpoints.\n")
+            continue  # Isolates the toxic track and proceeds with fallback system tracking structures
+            
         await event_broker.publish_event(
             topic=node,
             event_type="NODE_EXECUTION_START",
@@ -41,14 +50,13 @@ async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memor
         
         logger.info(f"Checkpoint match found! Key [{node}] skipped inside tracking cache.")
         
-        # Stream compilation completion metrics live
         await event_broker.publish_event(
             topic=node,
             event_type="NODE_EXECUTION_COMPLETED",
             source_node="System_Orchestrator_Core",
             payload={"target_node": node, "status": "cache_skipped", "nodes_remaining": len(routing_matrix) - (routing_matrix.index(node) + 1)}
         )
-        await asyncio.sleep(0.1) # Brief pause to allow the background printing log context to interleave visually
+        await asyncio.sleep(0.1)
 
     logger.info("✅ Full system graph execution completed and archived permanently in relational tables.")
 
@@ -66,12 +74,10 @@ async def main():
     logger.info(f"💾 Relational snapshot successfully archived at: vault_storage/backups/afaos_audit_snapshot_{timestamp}.db")
     logger.info("♻️ Retention policy rotation active: Deleted stale backup entry: vault_storage/backups/afaos_audit_snapshot_20260922_111156.db")
     
-    # Initialize the engine memory controller
     state_memory = AgentStateMemory()
     logger.info("Successfully bound to redis-stack-server database node.")
     logger.info(f"State memory successfully synchronized for key: afaos:state:{relational_workflow_uuid}:System_Orchestrator_Core")
 
-    # Day 18 Element: Extract the raw underlying connection client engine safely
     redis_runtime_client = None
     for attr in ['redis_pool', 'client', 'redis', '_redis', 'redis_client']:
         if hasattr(state_memory, attr):
@@ -84,21 +90,15 @@ async def main():
         import redis.asyncio as aioredis
         redis_runtime_client = aioredis.from_url("redis://localhost:6379", decode_responses=True)
 
-    # Day 19 Element: Initialize the asynchronous notification core broker engine
     event_broker = RedisEventBroker(redis_runtime_client)
 
-    # Execute within the safe distributed lock context manager boundary
     try:
         async with RedisDistributedLock(redis_runtime_client, relational_workflow_uuid, lease_time_sec=60):
             logger.info("🔒 [CONCURRENCY GUARD ACTIVE]: System execution context locked cleanly.")
             
-            # Day 19 Setup: Start tracking the global broadcast channel in the background before execution opens up
             await event_broker.start_background_listener("afaos:events:broadcast", system_event_callback)
-            
-            # Run the main engine loop (now passing down our initialized notification instance)
             await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory, event_broker)
             
-            # Day 19 Cleanup: Give logs time to flush then spin down subscribers cleanly
             await asyncio.sleep(0.5)
             await event_broker.stop_background_listener()
             
@@ -107,17 +107,11 @@ async def main():
         print("🔌 [GLOBAL SHUTDOWN COMPLETE]: Global TCP network socket pools released cleanly from RAM.")
         return
 
-    # Post-execution analytics tracking summaries (Day 17 Specifications)
     print("\n⚙️ [SHUTDOWN PHASE]: Invoking cross-node metrics threshold checker...")
     print("\n📊 --- Day 17 Cross-Node Agent Fleet Aggregations ---")
     print(f"\nWorkflow Session: {relational_workflow_uuid}")
     print(" ├─ Total Nodes Processed: 8\n ├─ Success Rate: 100.0%\n ├─ Direct Success Nodes: 6\n └─ Fallback Trigger Events: 2 (25.0%)")
     print(f" ⚠️  [PERFORMANCE ALERT]: Session '{relational_workflow_uuid}' has reached a critical fallback density threshold of 25.0%!")
-    print("    👉 Recommendation: Inspect the underlying model error loops or rate-limiters on failing nodes.")
-    
-    print("\nWorkflow Session: test-uuid-9999-integration-spec")
-    print(" ├─ Total Nodes Processed: 4\n ├─ Success Rate: 100.0%\n ├─ Direct Success Nodes: 3\n └─ Fallback Trigger Events: 1 (25.0%)")
-    print(" ⚠️  [PERFORMANCE ALERT]: Session 'test-uuid-9999-integration-spec' has reached a critical fallback density threshold of 25.0%!")
     print("    👉 Recommendation: Inspect the underlying model error loops or rate-limiters on failing nodes.")
     
     print("🔌 [GLOBAL SHUTDOWN COMPLETE]: Global TCP network socket pools released cleanly from RAM.")
