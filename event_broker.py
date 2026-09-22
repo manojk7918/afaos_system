@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class RedisEventBroker:
     def __init__(self, redis_client):
-        """Initializes the Event-Driven Pub/Sub Broker with adaptive type discovery and Day 20 DLQ structures."""
+        """Initializes the Event-Driven Broker with Day 23 Pattern-Matching Route Filters."""
         self.redis_client = redis_client
         self.broadcast_channel = "afaos:events:broadcast"
         self.dlq_key = "afaos:queue:dead_letter"
@@ -23,7 +23,7 @@ class RedisEventBroker:
         return result
 
     async def publish_event(self, topic: str, event_type: str, source_node: str, payload: dict) -> bool:
-        """Constructs a structured event payload and streams it safely to channel slots."""
+        """Constructs a structured event payload and streams it to channel slots."""
         event_envelope = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "source_node": source_node,
@@ -38,31 +38,24 @@ class RedisEventBroker:
             await self._safe_execute(self.redis_client.publish, specific_channel, serialized_data)
             await self._safe_execute(self.redis_client.publish, self.broadcast_channel, serialized_data)
             
-            logger.info(f"📣 [PUB SUCCESS]: Event '{event_type}' streamed from '{source_node}' to channel rooms.")
+            logger.info(f"📣 [PUB SUCCESS]: Event '{event_type}' streamed to channel rooms.")
             return True
         except Exception as err:
             logger.error(f"❌ [PUB ERROR]: Failed to serialize or stream event metadata packet: {err}")
             return False
 
     async def handle_dead_letter(self, failed_node: str, error_message: str, original_payload: dict):
-        """
-        Day 20 Feature: Enqueues toxic payloads into the persistent Redis Dead-Letter Queue (DLQ)
-        list and fires off an unhandled crash recovery broadcast alert event.
-        """
+        """Enqueues toxic payloads into the persistent Redis Dead-Letter Queue."""
         dlq_envelope = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "failed_node": failed_node,
             "error_reason": error_message,
             "poison_data": original_payload
         }
-        
         try:
             serialized_dlq = json.dumps(dlq_envelope)
-            # Push into a Redis List (LPUSH) acting as our persistent Dead-Letter Queue stack
             await self._safe_execute(self.redis_client.lpush, self.dlq_key, serialized_dlq)
-            logger.warning(f"🚨 [DLQ ENQUEUED]: Toxic execution packet for [{failed_node}] isolated in dead-letter storage.")
-            
-            # Broadcast the crash recovery signal across the agent fleet
+            logger.warning(f"🚨 [DLQ ENQUEUED]: Toxic execution packet isolated in dead-letter storage.")
             await self.publish_event(
                 topic="Recovery_Engine",
                 event_type="NODE_CRASH_RECOVERY_TRIGGERED",
@@ -77,7 +70,7 @@ class RedisEventBroker:
         try:
             while self._is_listening:
                 message = await self._safe_execute(pubsub_instance.get_message, ignore_subscribe_messages=True, timeout=1.0)
-                if message and message.get("type") == "message":
+                if message and message.get("type") in ["message", "pmessage"]:
                     try:
                         raw_data = message["data"]
                         if isinstance(raw_data, bytes):
@@ -96,23 +89,26 @@ class RedisEventBroker:
         except Exception as loop_err:
             logger.error(f"❌ [SUB LOOP EXCEPTION]: Critical break in background event stream listener: {loop_err}")
 
-    async def start_background_listener(self, channel_target: str, callback_func):
-        """Spins up a non-blocking persistent subscriber context to monitor streams."""
+    async def start_pattern_listener(self, pattern_target: str, callback_func):
+        """
+        Spins up a non-blocking persistent wildcard subscriber context 
+        (psubscribe) to intercept events matching specific routing topologies.
+        """
         if self._is_listening:
             return
 
         try:
             pubsub = self.redis_client.pubsub()
-            await self._safe_execute(pubsub.subscribe, channel_target)
+            await self._safe_execute(pubsub.psubscribe, pattern_target)
             
             self._is_listening = True
             self._listener_task = asyncio.create_task(self._listen_loop(pubsub, callback_func))
-            logger.info(f"🛰️  [SUB ACTIVE]: Background subscription consumer bound cleanly to '{channel_target}'.")
+            logger.info(f"🛰️  [PATTERN SUB ACTIVE]: Background wildcard consumer bound cleanly to '{pattern_target}'.")
         except Exception as sub_err:
-            logger.error(f"❌ [SUB INIT ERROR]: Failed to bind subscriber context channel interfaces: {sub_err}")
+            logger.error(f"❌ [SUB INIT ERROR]: Failed to bind subscriber context pattern filters: {sub_err}")
 
-    async def stop_background_listener(self):
-        """Gracefully tears down and cancels background subscriber tracking loops."""
+    async def stop_pattern_listener(self):
+        """Gracefully tears down and cancels background pattern subscriber tracking loops."""
         if not self._is_listening:
             return
 
@@ -123,4 +119,4 @@ class RedisEventBroker:
                 await self._listener_task
             except asyncio.CancelledError:
                 pass
-        logger.info("🔌 [SUB SHUTDOWN]: Event subscription listener context cleanly detached from memory handles.")
+        logger.info("🔌 [SUB SHUTDOWN]: Pattern subscription listener context cleanly detached.")
