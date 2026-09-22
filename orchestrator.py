@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime
 
-# Core System Engine Integrations (Day 18 - Day 23)
+# Core System Engine Integrations (Day 18 - Day 24)
 from dist_lock import RedisDistributedLock
 from state_memory import AgentStateMemory
 from event_broker import RedisEventBroker
@@ -21,14 +21,11 @@ logger = logging.getLogger(__name__)
 SYSTEM_ROUTING_MATRIX = ["Ingestion_Node", "Vector_Indexing_Node", "Analysis_Agent_Node", "Cloud_Dispatch_Node"]
 
 async def pattern_event_callback(event_envelope: dict):
-    """
-    Day 23 Refactored Hook: Catching wildcard match events from specific 
-    agent node routing slots.
-    """
+    """Day 23 Event Callback handler."""
     print(f"📡 [PATTERN MATCH INTERCEPTED]: {event_envelope.get('event_type')} from {event_envelope.get('source_node')}")
 
 async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memory, event_broker, metrics_exporter, compactor):
-    """Processes node execution graphs while broadcasting scoped topic-specific events."""
+    """Processes node execution graphs while dual-streaming state metrics to Pub/Sub and Redis Streams."""
     logger.info(f"Launching Persistent Orchestration Engine Layer for Workflow: {workflow_uuid}")
     
     for node in routing_matrix:
@@ -46,7 +43,7 @@ async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memor
             print("🔄 [STATE REVERSAL]: Active node transactional state cleanly reverted to parent ledger checkpoints.\n")
             continue
             
-        # Day 23: Publish to specific topics, allowing matching pattern rules to pick them up
+        # Day 24: This publish call now automatically broadcasts to Pub/Sub AND appends to the Redis Stream ledger
         await event_broker.publish_event(
             topic=node,
             event_type="NODE_EXECUTION_START",
@@ -104,13 +101,10 @@ async def main():
         async with RedisDistributedLock(redis_runtime_client, relational_workflow_uuid, lease_time_sec=60):
             logger.info("🔒 [CONCURRENCY GUARD ACTIVE]: System execution context locked cleanly.")
             
-            # Day 23 Core Alignment: Listen via standard pattern glob filters
             await event_broker.start_pattern_listener("afaos:events:*", pattern_event_callback)
-            
             await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory, event_broker, metrics_exporter, compactor)
             
             await asyncio.sleep(0.2)
-            # Day 23 Core Alignment: Cleanly tear down the active pattern listener task thread
             await event_broker.stop_pattern_listener()
             
             # Day 21 Live Compilation Metrics Dashboard
@@ -121,6 +115,15 @@ async def main():
             # Day 22 Log Compaction Stage
             print("\n🧹 --- Day 22 Memory Footprint Log Compaction Sweep ---")
             await compactor.compact_historical_logs(retention_seconds=5)
+            
+            # Day 24 Stream Ledger Replay: Query the historical ledger to verify permanent event logs
+            print("\n🎞️  --- Day 24 Persistent Redis Stream Ledger Historical Replay Dumps ---")
+            history = await event_broker.replay_historical_events(start_id="-")
+            print(f"Total Persistent Stream Ledger Records Recovered: {len(history)}")
+            if history:
+                # Print the last recorded entry to confirm structure validity
+                print("Latest Replayed Record Structure Detail:")
+                print(json.dumps(history[-1], indent=2))
             
     except RuntimeError as lock_err:
         print(f"\n🛑 [ABORT]: Critical concurrency conflict encountered: {lock_err}")
