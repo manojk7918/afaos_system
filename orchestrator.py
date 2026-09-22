@@ -193,9 +193,13 @@ async def main():
             state_data={"status": "initializing_workflow_loop", "matrix_ready": True}
         )
         
-        # Run the main orchestrator system loop
-                # Run the main orchestrator system loop with Day 14 state memory tracking
+        # Run the main orchestrator system loop with Day 14 state memory tracking
         await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory)
+
+        # Day 17 Integration: Run Cross-Node Fleet Analytics & Threshold Verification
+        print("\n⚙️ [SHUTDOWN PHASE]: Invoking cross-node metrics threshold checker...")
+        from metric_aggregator import calculate_fleet_metrics
+        calculate_fleet_metrics()
 
 if __name__ == "__main__":
     asyncio.run(main())

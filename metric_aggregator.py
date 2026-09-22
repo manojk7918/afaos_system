@@ -24,11 +24,18 @@ def calculate_fleet_metrics():
         for row in rows:
             w_id, total, direct, fallback, fail = row
             success_rate = ((direct + fallback) / total) * 100 if total > 0 else 0
+            fallback_rate = (fallback / total) * 100 if total > 0 else 0
+            
             print(f"\nWorkflow Session: {w_id}")
             print(f" ├─ Total Nodes Processed: {total}")
             print(f" ├─ Success Rate: {success_rate:.1f}%")
             print(f" ├─ Direct Success Nodes: {direct}")
-            print(f" └─ Fallback Trigger Events: {fallback}")
+            print(f" └─ Fallback Trigger Events: {fallback} ({fallback_rate:.1f}%)")
+            
+            # Day 17 Performance Threshold Guard Constraint (25% Limit)
+            if fallback_rate >= 25.0:
+                print(f" ⚠️  [PERFORMANCE ALERT]: Session '{w_id}' has reached a critical fallback density threshold of {fallback_rate:.1f}%!")
+                print("    👉 Recommendation: Inspect the underlying model error loops or rate-limiters on failing nodes.")
             
     except sqlite3.OperationalError as e:
         print(f"❌ Database error: {e}")
