@@ -4,6 +4,9 @@ import logging
 import redis
 import redis.asyncio
 from state_memory import AgentStateMemory
+# Import the AFAOS relational database archiver engine built in Day 15
+from db_archiver import DatabaseArchiver
+
 
 
 # Setup Global Logging Configs
@@ -174,11 +177,15 @@ def parse_json_audit_payload(raw_json: str) -> dict:
 async def main():
     await initialize_system_infrastructure()
     async with SystemLifecycleContext():
+        # Day 15 Integration: Execute defensive point-in-time relational database snapshot
+        db_backup_engine = DatabaseArchiver(max_backups=5)
+        db_backup_engine.execute_snapshot()
+
         # Setup the connection to the Redis Docker container
         state_memory = AgentStateMemory()
         
         relational_workflow_uuid = "fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
-        
+
         # Save the system's starting state into memory
         state_memory.set_agent_state(
             session_id=relational_workflow_uuid,
