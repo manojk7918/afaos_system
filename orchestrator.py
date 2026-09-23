@@ -1,167 +1,156 @@
 import asyncio
-import json
 import logging
-import time
-from datetime import datetime
-import redis.asyncio as aioredis
+import uuid
+import sqlite3
+from redis.asyncio import Redis
+from rate_limiter import DistributedRateLimiter  # Import our Day 33 gatekeeper
 
-# Core System Engine Integrations
-from dist_lock import RedisDistributedLock
-from state_memory import AgentStateMemory
-from event_broker import RedisEventBroker
-from metrics_exporter import SystemMetricsExporter
-from telemetry_compactor import TelemetryCompactor
+# Configure structured logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("Orchestrator")
-
-SYSTEM_ROUTING_MATRIX = ["Ingestion_Node", "Vector_Indexing_Node", "Analysis_Agent_Node", "Cloud_Dispatch_Node"]
-shared_state_memory_ref = None
-
-async def cluster_sync_pattern_callback(*args, **kwargs):
-    """
-    Flexible callback accepting 1 or 2 positional arguments passed by redis-py pattern listeners.
-    Extracts incoming event payloads, parses JSON if available, and executes DAG workflow routines.
-    """
-    global shared_state_memory_ref
-    
-    # Extract raw event data from positional args
-    if not args:
-        logger.warning("Received empty event payload in callback.")
-        return
-
-    # Handle both single payload and channel/message tuple signatures
-    raw_message = args[-1]
-    
-    # Extract data payload if passed inside a redis-py message dict
-    if isinstance(raw_message, dict) and "data" in raw_message:
-        raw_message = raw_message["data"]
-
-    logger.info(f"⚡ [EVENT RECEIVED]: Processing incoming stream event: {raw_message}")
-
-    try:
-        if isinstance(raw_message, (bytes, str)):
-            try:
-                payload = json.loads(raw_message)
-                logger.info(f"📊 [PARSED JSON PAYLOAD]: {payload}")
-            except (json.JSONDecodeError, TypeError):
-                logger.info(f"📝 [RAW STRING PAYLOAD]: {raw_message}")
-
-    except Exception as err:
-        logger.warning(f"Quarantined payload into DLQ (afaos:queue:dead_letter): {err}")
-
-async def run_persistent_orchestrator(workflow_uuid, routing_matrix, state_memory, event_broker, metrics_exporter, compactor):
-    logger.info(f"Launching Day 30 Orchestration Engine Layer for Workflow: {workflow_uuid}")
-    
-    # Generate the initial base root Trace ID context for this distributed pipeline sequence
-    trace_context = await state_memory.generate_trace_context()
-    
-    for node in routing_matrix:
-        start_time = time.time()
+class IntegratedOrchestrator:
+    def __init__(self, instance_id=None, redis_url="redis://127.0.0.1:6379", db_path="afaos_audit.db"):
+        self.instance_id = instance_id or str(uuid.uuid4())
+        self.redis_url = redis_url
+        self.db_path = db_path
+        self.lock_key = "lock:workflow:fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
         
-        # Advance the Span ID context seamlessly while maintaining the root Trace ID chain
-        trace_context = await state_memory.generate_trace_context(parent_trace_id=trace_context["trace_id"])
+        # Core layers
+        self.redis = None
+        self.rate_limiter = None
+        self.db_conn = None
+
+    async def initialize_system(self):
+        """Bootstrap database tables, Redis connections, and distributed rate-limiter."""
+        logging.info(f"Initializing permanent relational storage engine layer: {self.db_path}")
+        self.db_conn = sqlite3.connect(self.db_path)
+        cursor = self.db_conn.cursor()
         
-        # Print trace tracking markers cleanly to the console log stream
-        await state_memory.log_traced_event(trace_context, node, "INITIALIZED")
-        
-        if node == "Analysis_Agent_Node":
-            logger.error(f"💥 [CRITICAL NODE FAILURE]: '{node}' has faulted database connectivity sockets unexpectedly!")
-            await event_broker.handle_dead_letter(
-                failed_node=node,
-                error_message="Connectivity dropped.",
-                original_payload={"target_node": node, "session_id": workflow_uuid, "trace_metadata": trace_context}
+        # Match your exact production schema discovered via PRAGMA table_info
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS execution_audit_logs (
+                id TEXT PRIMARY KEY,
+                workflow_id TEXT,
+                node_key TEXT,
+                assigned_agent TEXT,
+                completion_status TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                instance_id TEXT
             )
-            await state_memory.log_traced_event(trace_context, node, "QUARANTINED_TO_DLQ")
-            print("🔄 [STATE REVERSAL]: Active node transactional state cleanly reverted to parent ledger checkpoints.\n")
-            continue
-            
-        await event_broker.publish_event(
-            topic=node,
-            event_type="NODE_EXECUTION_START",
-            source_node="System_Orchestrator_Core",
-            payload={"target_node": node, "status": "processing", "trace_metadata": trace_context}
-        )
-        
-        await state_memory.log_traced_event(trace_context, node, "SUCCESSFULLY_PROCESSED")
-        
-        logger.info(f"Checkpoint match found! Key [{node}] skipped inside tracking cache.")
-        await asyncio.sleep(0.05) 
-        
-        await event_broker.publish_event(
-            topic=node,
-            event_type="NODE_EXECUTION_COMPLETED",
-            source_node="System_Orchestrator_Core",
-            payload={"target_node": node, "status": "cache_skipped", "trace_metadata": trace_context}
-        )
-        
-        duration_ms = (time.time() - start_time) * 1000.0
-        await metrics_exporter.record_node_latency(node, duration_ms)
-        await metrics_exporter.increment_node_counter(node, "execution_success")
-        print("")
+        """)
+        self.db_conn.commit()
 
-    logger.info("✅ Full system graph execution completed and trace context tracking sweeps finalized.")
+        logging.info("Initializing high-concurrency Asynchronous Redis Connection Pools...")
+        self.redis = Redis.from_url(self.redis_url, decode_responses=True)
+        
+        # Initialize the gatekeeper companion module
+        self.rate_limiter = DistributedRateLimiter(redis_url=self.redis_url)
+        await self.rate_limiter.initialize()
+
+    async def acquire_distributed_lock(self) -> bool:
+        """Secure single-instance distributed lock execution safety."""
+        is_locked = await self.redis.set(self.lock_key, self.instance_id, ex=60, nx=True)
+        if is_locked:
+            logging.info(f"🔒 [LOCK ACQUIRED]: Successfully locked key '{self.lock_key}' for instance {self.instance_id}")
+            logging.info("🔒 [CONCURRENCY GUARD ACTIVE]: System execution context locked cleanly.")
+            return True
+        return False
+
+    async def process_transaction_event(self, event_id: str, payload: dict):
+        """Simulate passing the financial ledger pipeline event down onto SQLite disk storage."""
+        try:
+            cursor = self.db_conn.cursor()
+            
+            # Map incoming Redis stream fields to your exact SQLite schema columns
+            workflow_id = payload.get("reference_id", f"WF-{event_id}")
+            node_key = payload.get("type", "unknown_txn")
+            assigned_agent = f"{node_key}_agent_node"
+            completion_status = "COMMITTED"
+
+            cursor.execute(
+                """
+                INSERT INTO execution_audit_logs 
+                (id, workflow_id, node_key, assigned_agent, completion_status, instance_id) 
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (event_id, workflow_id, node_key, assigned_agent, completion_status, self.instance_id)
+            )
+            self.db_conn.commit()
+            logging.info(f"💾 [SQLITE PERSISTED]: Event {event_id} committed securely to disk archive.")
+        except Exception as e:
+            logging.error(f"❌ Failed to archive transaction log down to disk: {e}")
+
+    async def run_event_listener_loop(self):
+        """Continuously polls for incoming events while routing through admission gatekeeper."""
+        group_name = "afaos:group:orchestrator_workers"
+        stream_key = "afaos:stream:event_ledger"
+        
+        # Ensure Stream and Consumer Group frameworks are active
+        try:
+            await self.redis.xgroup_create(stream_key, group_name, id="0", mkstream=True)
+        except Exception:
+            logging.info(f"👥 [CONSUMER GROUP ACTIVE]: Group '{group_name}' already exists.")
+
+        logging.info("Subscribed to wildcard pattern: afaos:events:*")
+        print("\n🚀 Orchestrator active and parsing transactions. Press [Ctrl + C] to terminate.")
+
+        try:
+            while True:
+                # Read stream payloads as a consumer worker node
+                # Using short polling blocks to remain reactive yet gentle on CPU cycles
+                response = await self.redis.xreadgroup(group_name, self.instance_id, {stream_key: ">"}, count=1, block=1000)
+                
+                if response:
+                    for stream, messages in response:
+                        for msg_id, payload in messages:
+                            logging.info(f"📥 Inbound Stream event intercepted: {msg_id}")
+                            
+                            # Apply Day 34 Integrated Admission Gatekeeper Control
+                            # Set aggressive limits (max 3 requests per 10 seconds per node) for protection
+                            allowed = await self.rate_limiter.is_allowed(client_id=self.instance_id, max_requests=3, window_seconds=10)
+                            
+                            if allowed:
+                                await self.process_transaction_event(msg_id, payload)
+                                # Acknowledge task removal from PEL matrix
+                                await self.redis.xack(stream_key, group_name, msg_id)
+                            else:
+                                logging.warning(f"🛑 [BACKOFF PACING]: Dropping processing pipeline window for task {msg_id} due to traffic limits.")
+                
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            pass
+
+    async def close(self):
+        """Cleanly close all communication pipes and databases."""
+        if self.redis:
+            # Release lock context safely before leaving
+            current_lock_owner = await self.redis.get(self.lock_key)
+            if current_lock_owner == self.instance_id:
+                await self.redis.delete(self.lock_key)
+                logging.info("🔒 [LOCK RELEASED]: System lock key dropped cleanly during shutdown.")
+            await self.redis.aclose()
+        if self.rate_limiter:
+            await self.rate_limiter.close()
+        if self.db_conn:
+            self.db_conn.close()
+        logging.info("🔒 System connections shut down gracefully.")
 
 async def main():
-    global shared_state_memory_ref
-    relational_workflow_uuid = "fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
+    orchestrator = IntegratedOrchestrator()
+    await orchestrator.initialize_system()
     
-    logger.info("Initializing permanent relational storage engine layer: afaos_audit.db")
-    logger.info("Initializing high-concurrency Asynchronous Redis Connection Pools...")
-    
-    redis_runtime_client = aioredis.from_url("redis://localhost:6379", decode_responses=True)
-    redis_broker_client = aioredis.from_url("redis://localhost:6379", decode_responses=True)
-
-    state_memory = AgentStateMemory(redis_runtime_client)
-    shared_state_memory_ref = state_memory
-    
-    event_broker = RedisEventBroker(redis_broker_client)
-    metrics_exporter = SystemMetricsExporter(redis_runtime_client)
-    compactor = TelemetryCompactor(redis_runtime_client, threshold_ms=1000.0)
+    if not await orchestrator.acquire_distributed_lock():
+        logging.error("❌ Concurrency lock execution conflict! Another orchestrator instance is running. Aborting.")
+        if orchestrator.db_conn:
+            orchestrator.db_conn.close()
+        return
 
     try:
-        async with RedisDistributedLock(redis_runtime_client, relational_workflow_uuid, lease_time_sec=60):
-            logger.info("🔒 [CONCURRENCY GUARD ACTIVE]: System execution context locked cleanly.")
-            
-            await event_broker.initialize_consumer_group()
-            
-            # Subscribe to wildcard pattern using the flexible callback
-            if hasattr(event_broker, 'start_pattern_listener'):
-                await event_broker.start_pattern_listener("afaos:events:*", cluster_sync_pattern_callback)
-                logger.info("Subscribed to wildcard pattern: afaos:events:*")
-            
-            print("\n🚀 --- PIPELINE RUN: TRANSACTIONS WITH DYNAMIC DISTRIBUTED TRACING ---")
-            await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory, event_broker, metrics_exporter, compactor)
-            
-            print("\n📡 [DAEMON LISTENER ACTIVE]: Standing by for incoming stream events (Press Ctrl+C to stop)...")
-            
-            # Keep orchestrator daemon listening continuously for incoming Pub/Sub events
-            while True:
-                await asyncio.sleep(1)
-
-    except asyncio.CancelledError:
-        logger.info("Received shutdown signal. Stopping pattern listeners...")
-    except RuntimeError as lock_err:
-        print(f"\n🛑 [ABORT]: Critical concurrency conflict encountered: {lock_err}")
-        return
+        await orchestrator.run_event_listener_loop()
+    except KeyboardInterrupt:
+        print("\n👋 Shutdown signal detected via manual keyboard interrupt.")
     finally:
-        if hasattr(event_broker, 'stop_pattern_listener'):
-            await event_broker.stop_pattern_listener()
-            
-        await redis_runtime_client.aclose()
-        await redis_broker_client.aclose()
-
-    print("\n🔌 [GLOBAL SHUTDOWN COMPLETE]: Global TCP network socket pools released cleanly from RAM.")
+        await orchestrator.close()
 
 if __name__ == "__main__":
-    try:
-        import sys
-        if sys.platform == 'win32':
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
-        
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nProcess terminated manually.")
+    asyncio.run(main())
