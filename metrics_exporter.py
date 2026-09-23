@@ -1,75 +1,81 @@
 import asyncio
-import json
 import logging
-from datetime import datetime
+import time
+from redis.asyncio import Redis
 
-logger = logging.getLogger("MetricsExporter")
+# Configure structured logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-class SystemMetricsExporter:
-    def __init__(self, redis_client):
-        """Initializes Day 21 Live Metrics Dashboard Engine."""
-        self.redis_client = redis_client
-        self.latency_prefix = "afaos:metrics:latency:"
-        self.counter_prefix = "afaos:metrics:counters:"
+class TelemetryMetricsExporter:
+    def __init__(self, redis_url="redis://127.0.0.1:6379"):
+        self.redis_url = redis_url
+        self.redis = None
+        self.stream_key = "afaos:stream:event_ledger"
+        self.group_name = "afaos:group:orchestrator_workers"
 
-    async def _safe_execute(self, target_callable, *args, **kwargs):
-        """Internal helper to execute and await callables uniformly."""
-        result = target_callable(*args, **kwargs)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
+    async def initialize(self):
+        """Establish asynchronous connection pools to memory cache layer."""
+        self.redis = Redis.from_url(self.redis_url, decode_responses=True)
+        logging.info("⚙️ Telemetry Metrics Exporter Engine initialized.")
 
-    async def record_node_latency(self, node_key: str, duration_ms: float):
-        """Appends raw processing durations to a Redis list for sliding window evaluation."""
+    async def generate_prometheus_metrics(self) -> str:
+        """
+        Scrapes cluster states and formats data into standard Prometheus time-series text notation.
+        """
+        metrics_output = []
+        timestamp_ms = int(time.time() * 1000)
+
         try:
-            key = f"{self.latency_prefix}{node_key}"
-            await self._safe_execute(self.redis_client.lpush, key, str(duration_ms))
-            # Caps latency tracking history to the most recent 100 entries to save RAM
-            await self._safe_execute(self.redis_client.ltrim, key, 0, 99)
-        except Exception as err:
-            logger.error(f"❌ [METRICS ERROR]: Failed to record node latency: {err}")
+            # 1. Fetch current Redis Stream performance counters
+            try:
+                stream_info = await self.redis.xinfo_stream(self.stream_key)
+                stream_len = stream_info.get("length", 0)
+                consumer_count = stream_info.get("groups", 0)
+            except Exception:
+                stream_len = 0
+                consumer_count = 0
 
-    async def increment_node_counter(self, node_key: str, metric_type: str):
-        """Increments atomic metric tracking counters inside the cluster."""
-        try:
-            key = f"{self.counter_prefix}{node_key}:{metric_type}"
-            await self._safe_execute(self.redis_client.incr, key)
-        except Exception as err:
-            logger.error(f"❌ [METRICS ERROR]: Failed to increment node counter: {err}")
+            # 2. Fetch pending tasks from consumer groups
+            try:
+                pending_info = await self.redis.xpending(self.stream_key, self.group_name)
+                pending_count = pending_info.get("pending", 0) if pending_info else 0
+            except Exception:
+                pending_count = 0
 
-    async def fetch_live_dashboard_aggregations(self) -> dict:
-        """Compiles tracked performance variables into a clean JSON dashboard payload."""
-        dashboard = {
-            "exported_at": datetime.utcnow().isoformat() + "Z",
-            "cluster_health": "OPTIMAL",
-            "node_metrics": {}
-        }
-        
-        nodes = ["Ingestion_Node", "Vector_Indexing_Node", "Analysis_Agent_Node", "Cloud_Dispatch_Node"]
-        try:
-            for node in nodes:
-                success_key = f"{self.counter_prefix}{node}:execution_success"
-                dlq_key = f"{self.counter_prefix}{node}:dlq_quarantine"
-                latency_key = f"{self.latency_prefix}{node}"
-                
-                success_count = await self._safe_execute(self.redis_client.get, success_key)
-                dlq_count = await self._safe_execute(self.redis_client.get, dlq_key)
-                latencies = await self._safe_execute(self.redis_client.lrange, latency_key, 0, -1)
-                
-                # Normalize byte conversions safely if necessary
-                def decode_val(v):
-                    if v is None: return 0
-                    return int(v.decode('utf-8') if isinstance(v, bytes) else v)
-                
-                float_latencies = [float(l.decode('utf-8') if isinstance(l, bytes) else l) for l in latencies if l]
-                avg_latency = sum(float_latencies) / len(float_latencies) if float_latencies else 0.0
-                
-                dashboard["node_metrics"][node] = {
-                    "execution_success_count": decode_val(success_count),
-                    "dlq_quarantine_count": decode_val(dlq_count),
-                    "average_latency_ms": round(avg_latency, 2)
-                }
-            return dashboard
-        except Exception as err:
-            logger.error(f"❌ [DASHBOARD ERROR]: Failed to aggregate live system telemetry: {err}")
-            return {"error": str(err)}
+            # 3. Compile structural open metrics notation format entries
+            metrics_output.append("# HELP afaos_stream_events_total Current total event count residing inside memory stream.")
+            metrics_output.append("# TYPE afaos_stream_events_total gauge")
+            metrics_output.append(f"afaos_stream_events_total{{stream=\"{self.stream_key}\"}} {stream_len} {timestamp_ms}")
+
+            metrics_output.append("# HELP afaos_stream_pending_tasks_total Number of unacknowledged entries stalling in the PEL.")
+            metrics_output.append("# TYPE afaos_stream_pending_tasks_total gauge")
+            metrics_output.append(f"afaos_stream_pending_tasks_total{{group=\"{self.group_name}\"}} {pending_count} {timestamp_ms}")
+
+            metrics_output.append("# HELP afaos_active_consumers_total Number of active microservice workers registered to consumer fleet.")
+            metrics_output.append("# TYPE afaos_active_consumers_total gauge")
+            metrics_output.append(f"afaos_active_consumers_total{{group=\"{self.group_name}\"}} {consumer_count} {timestamp_ms}")
+
+        except Exception as e:
+            logging.error(f"❌ Failed to parse telemetry matrix compilation: {e}")
+            
+        return "\n".join(metrics_output)
+
+    async def close(self):
+        """Clean up connection socket structures safely."""
+        if self.redis:
+            await self.redis.aclose()
+            logging.info("🔒 Metrics Exporter connection pool closed cleanly.")
+
+async def main():
+    exporter = TelemetryMetricsExporter()
+    await exporter.initialize()
+    try:
+        print("\n📊 --- SCRAPING LIVE TELEMETRY MATRIX SNAPSHOT ---")
+        serialized_payload = await exporter.generate_prometheus_metrics()
+        print(serialized_payload)
+        print("📊 ------------------------------------------------\n")
+    finally:
+        await exporter.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
