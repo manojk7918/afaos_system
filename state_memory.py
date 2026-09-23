@@ -1,13 +1,14 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 
 logger = logging.getLogger("StateMemory")
 
 class AgentStateMemory:
     def __init__(self, redis_client=None):
-        """Initializes Day 27 Split-State Cache Memory with Multi-Node Sync capabilities."""
+        """Initializes Day 28 Split-State Cache Memory with Admission Control Rate Limiting."""
         if redis_client:
             self.client = redis_client
         else:
@@ -21,19 +22,65 @@ class AgentStateMemory:
         }
 
     async def get_local_metric(self, metric_key: str) -> int:
-        """Safely extracts a tracked local in-memory node counter value."""
         return self._local_metrics_cache.get(metric_key, 0)
 
     async def force_local_increment(self, metric_key: str, increment_value: int = 1):
-        """Simulates atomic workloads advancing in-memory statistics before background syncs fire."""
         if metric_key in self._local_metrics_cache:
             self._local_metrics_cache[metric_key] += increment_value
 
+    async def evaluate_admission_allowance(self, node_key: str, max_tokens: int = 5, refill_rate_per_sec: float = 2.0) -> bool:
+        """
+        Day 28 Feature: Distributed Token Bucket Admission Control.
+        Tracks available resource tokens atomically in Redis to block downstream API drowning.
+        """
+        try:
+            bucket_key = f"afaos:limiter:tokens:{node_key}"
+            ts_key = f"afaos:limiter:last_refill:{node_key}"
+            
+            now = time.time()
+            
+            # Atomic fetch from cluster
+            pipe = self.client.pipeline()
+            pipe.get(bucket_key)
+            pipe.get(ts_key)
+            res = await pipe.execute()
+            
+            raw_tokens = res[0]
+            raw_last_refill = res[1]
+            
+            # Normalize and decode values safely
+            def to_float(v, default):
+                if v is None: return default
+                return float(v.decode('utf-8') if isinstance(v, bytes) else v)
+                
+            current_tokens = to_float(raw_tokens, float(max_tokens))
+            last_refill = to_float(raw_last_refill, now)
+            
+            # Calculate dynamic token replenishment based on delta-time windows
+            time_passed = now - last_refill
+            refilled_tokens = current_tokens + (time_passed * refill_rate_per_sec)
+            actual_tokens = min(float(max_tokens), refilled_tokens)
+            
+            if actual_tokens >= 1.0:
+                # Deduct token and grant system entry admission
+                actual_tokens -= 1.0
+                
+                pipe = self.client.pipeline()
+                pipe.set(bucket_key, str(actual_tokens))
+                pipe.set(ts_key, str(now))
+                await pipe.execute()
+                
+                logger.info(f"🍏 [ADMISSION GRANTED]: Node '{node_key}' passed rate-limiter. Available Capacity: {actual_tokens:.1f}")
+                return True
+            else:
+                # Capacity depleted, log strict admission denial
+                logger.warning(f"⚠️  [ADMISSION DENIED]: Node '{node_key}' rate-limited! Distributed Token Bucket is dry.")
+                return False
+        except Exception as err:
+            logger.error(f"❌ [LIMITER ERROR]: Admission matrix evaluation failed: {err}")
+            return True # Fallback to open admission under error states to preserve processing continuity
+
     async def generate_master_snapshot(self) -> dict:
-        """
-        Compiles high-performance state fields from the primary cache into an
-        authoritative transaction blueprint to broadcast out onto the cluster network.
-        """
         try:
             redis_total = await self.client.get("afaos:analytics:total_processed")
             redis_fail = await self.client.get("afaos:analytics:failures_quarantined")
@@ -52,10 +99,6 @@ class AgentStateMemory:
             return {"master_registry": self._local_metrics_cache}
 
     async def evaluate_and_reconcile_drift(self, cluster_snapshot_payload: dict) -> bool:
-        """
-        Day 27 Core Logic: Compares local worker metrics directly against the master matrix payload.
-        Triggers a hot catch-up loop if a distributed drift anomaly is detected.
-        """
         master_data = cluster_snapshot_payload.get("master_registry", {})
         drift_detected = False
         
@@ -64,10 +107,7 @@ class AgentStateMemory:
             local_val = self._local_metrics_cache[key]
             
             if local_val != master_val:
-                logger.warning(
-                    f"⚠️ [STATE DRIFT DETECTED]: Cluster variation identified on metric '{key}'! "
-                    f"Master Registry: {master_val} | Local Worker Cache: {local_val}"
-                )
+                logger.warning(f"⚠️ [STATE DRIFT DETECTED]: Cluster variation identified on metric '{key}'! Master Registry: {master_val} | Local Worker Cache: {local_val}")
                 drift_detected = True
         
         if drift_detected:
