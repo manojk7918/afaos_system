@@ -1,69 +1,93 @@
-# projects/afaos_system/telemetry_dashboard.py
-import json
+import asyncio
 import logging
-import time
-from typing import List
-from state_memory import AgentStateMemory
+import sqlite3
+import os
+from redis.asyncio import Redis
 
-# Configure clean logging for our dashboard engine
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("AFAOS_Telemetry")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class TelemetryDashboard:
-    """Streams and visualizes live multi-agent states directly inside the terminal window."""
-    
-    def __init__(self):
-        # Bind directly to our existing Day 14 Redis memory engine
-        self.memory = AgentStateMemory()
+    def __init__(self, redis_url="redis://127.0.0.1:6379", db_path="afaos_audit.db"):
+        self.redis_url = redis_url
+        self.db_path = db_path
+        self.redis = None
 
-    def render_active_fleet_status(self, session_id: str) -> None:
-        """Queries Redis infrastructure and prints a clean, structured status dashboard."""
-        print("\n" + "="*60)
-        print(f"📡 AFAOS LIVE AGENT TELEMETRY STREAM | SESSION: {session_id}")
-        print("="*60)
+    async def initialize(self):
+        """Establish high-performance asynchronous connection layers."""
+        self.redis = Redis.from_url(self.redis_url, decode_responses=True)
+
+    async def fetch_metrics(self, stream_key="afaos:stream:event_ledger"):
+        """Collect systemic health markers from memory and disk structures."""
+        metrics = {
+            "redis_stream_len": 0,
+            "sqlite_log_count": 0,
+            "system_status": "HEALTHY"
+        }
         
-        # 1. Fetch all unique agents registered to this workflow session
-        active_agents: List[str] = self.memory.get_active_agents(session_id)
+        # 1. Inspect Redis live memory footprint
+        try:
+            stream_info = await self.redis.xinfo_stream(stream_key)
+            metrics["redis_stream_len"] = stream_info.get("length", 0)
+        except Exception as e:
+            if "no such key" in str(e).lower():
+                metrics["redis_stream_len"] = 0
+            else:
+                metrics["system_status"] = "DEGRADED"
+
+        # 2. Inspect SQLite permanent disk footprint
+        try:
+            if os.path.exists(self.db_path):
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='execution_audit_logs'")
+                if cursor.fetchone():
+                    cursor.execute("SELECT COUNT(*) FROM execution_audit_logs")
+                    metrics["sqlite_log_count"] = cursor.fetchone()[0]
+                conn.close()
+        except Exception:
+            metrics["system_status"] = "DEGRADED"
+
+        return metrics
+
+    def render_view(self, metrics):
+        """Render a clean, structured operational dashboard view directly to standard output."""
+        # Clear screen for terminal animation effect
+        os.system('cls' if os.name == 'nt' else 'clear')
         
-        if not active_agents:
-            print("   [!] No active agent fleet components detected in telemetry store.")
-            print("="*60 + "\n")
-            return
+        print("=" * 60)
+        print(" 🖥️  AFAOS SYSTEM REAL-TIME OPERATIONAL TELEMETRY DASHBOARD")
+        print("=" * 60)
+        print(f" 🟢 System Status         : {metrics['system_status']}")
+        print(f" 💾 Redis Stream Memory   : {metrics['redis_stream_len']} live events")
+        print(f" 📊 SQLite Permanent Disk : {metrics['sqlite_log_count']} logs committed")
+        print("-" * 60)
+        print(" Monitoring active loops... Press [Ctrl + C] to terminate dashboard.")
+        print("=" * 60)
 
-        # 2. Iterate through each discovered agent and extract its real-time payload data
-        for agent_role in active_agents:
-            raw_state = self.memory.get_agent_state(session_id, agent_role)
-            
-            if raw_state and "payload_data" in raw_state:
-                data = raw_state["payload_data"]
-                # Extract structured values or fallback to default strings if not present
-                status = data.get("status", "UNKNOWN")
-                current_task = data.get("current_task", data.get("current_step", "N/A"))
-                agent_type = data.get("agent_type", "Core_Component")
-                
-                # Assign simple clean visual icons for scannability based on status text
-                icon = "🟢" if status in ["SUCCESS", "processing_complete", "monitoring"] else "⚡"
-                
-                print(f" {icon} ROLE: {agent_role:<25} | TYPE: {agent_type:<25}")
-                print(f"    STATUS: {status:<23} | TASK: {current_task}")
-                print("-" * 60)
-                
-        print(f"⏱️ Telemetry frame generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("="*60 + "\n")
+    async def start_monitoring_loop(self, interval=3):
+        """Execute continuous pooling of health matrices."""
+        try:
+            while True:
+                metrics = await self.fetch_metrics()
+                self.render_view(metrics)
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass
 
-# --- Interactive Test Loop ---
-if __name__ == "__main__":
-    print("\n--- Booting Day 16 Telemetry Streaming Monitor Engine ---")
+    async def close(self):
+        if self.redis:
+            await self.redis.aclose()
+            logging.info("\n🔒 Dashboard diagnostic interface closed cleanly.")
+
+async def main():
     dashboard = TelemetryDashboard()
-    
-    # Target our standard verified system session UUID
-    target_session = "fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
-    
-    print(f"\n[Dashboard Active]  Monitoring target session cluster. Press Ctrl+C to exit.")
+    await dashboard.initialize()
     try:
-        # Run a continuous loop that refreshes the console visualization frame every 3 seconds
-        while True:
-            dashboard.render_active_fleet_status(target_session)
-            time.sleep(3)
+        await dashboard.start_monitoring_loop()
     except KeyboardInterrupt:
-        print("\n🔌 Telemetry streaming monitor disconnected cleanly.")
+        pass
+    finally:
+        await dashboard.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
