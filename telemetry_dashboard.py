@@ -59,7 +59,7 @@ if __name__ == "__main__":
     # Target our standard verified system session UUID
     target_session = "fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
     
-    print(f"\n[Dashboard Active] Monitoring target session cluster. Press Ctrl+C to exit.")
+    print(f"\n[Dashboard Active]  Monitoring target session cluster. Press Ctrl+C to exit.")
     try:
         # Run a continuous loop that refreshes the console visualization frame every 3 seconds
         while True:
