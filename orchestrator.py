@@ -6,10 +6,10 @@ import os
 import time
 from datetime import datetime
 
-# Core System Engine Integrations (Day 18 - Day 25)
+# Core System Engine Integrations (Day 18 - Day 26)
 from dist_lock import RedisDistributedLock
 from state_memory import AgentStateMemory
-from event_broker import RedisEventBroker
+from event_broker import EventBroker
 from metrics_exporter import SystemMetricsExporter
 from telemetry_compactor import TelemetryCompactor
 
@@ -92,7 +92,7 @@ async def main():
         import redis.asyncio as aioredis
         redis_runtime_client = aioredis.from_url("redis://localhost:6379", decode_responses=True)
 
-    event_broker = RedisEventBroker(redis_runtime_client)
+    event_broker = EventBroker(redis_runtime_client)
     metrics_exporter = SystemMetricsExporter(redis_runtime_client)
     compactor = TelemetryCompactor(redis_runtime_client, threshold_ms=1000.0)
 
@@ -100,10 +100,9 @@ async def main():
         async with RedisDistributedLock(redis_runtime_client, relational_workflow_uuid, lease_time_sec=60):
             logger.info("🔒 [CONCURRENCY GUARD ACTIVE]: System execution context locked cleanly.")
             
-            # Day 25: Initialize the load-balancing group layers inside the stream topology
             await event_broker.initialize_consumer_group()
-            
             await event_broker.start_pattern_listener("afaos:events:*", pattern_event_callback)
+            
             await run_persistent_orchestrator(relational_workflow_uuid, SYSTEM_ROUTING_MATRIX, state_memory, event_broker, metrics_exporter, compactor)
             
             await asyncio.sleep(0.2)
@@ -118,20 +117,33 @@ async def main():
             print("\n🧹 --- Day 22 Memory Footprint Log Compaction Sweep ---")
             await compactor.compact_historical_logs(retention_seconds=5)
             
-            # Day 25 Distributed Load Balancer Verification:
-            # We spin up two distinct virtual consumers to read concurrently from the shared group line
-            print("\n👥 --- Day 25 Parallel Consumer Group Event Allocation ---")
+            # Day 26 Distributed PEL Audit and XCLAIM verification simulation:
+            print("\n🕵️‍♂️ --- Day 26 Consumer Group PEL Audit & XCLAIM Simulation ---")
             
+            # 1. Simulate Worker_Alpha reading tasks but crashing before acknowledging (omits XACK)
             alpha_tasks = await event_broker.read_from_consumer_group(consumer_name="Worker_Alpha", count=2)
-            beta_tasks = await event_broker.read_from_consumer_group(consumer_name="Worker_Beta", count=2)
+            print(f"💥 [CRASH SIMULATION]: 'Worker_Alpha' fetched {len(alpha_tasks)} tasks, but went offline before XACK!")
             
-            print(f"🛠️ [Worker_Alpha] processing load-balanced events: {len(alpha_tasks)}")
-            for task in alpha_tasks:
-                print(f"   ├─ ID: {task['message_id']} | Type: {task['data']['event_type']} from {task['data']['source_node']}")
-                
-            print(f"🛠️ [Worker_Beta] processing load-balanced events: {len(beta_tasks)}")
+            # 2. Simulate Worker_Beta fetching its own assigned shares and acknowledging them safely
+            beta_tasks = await event_broker.read_from_consumer_group(consumer_name="Worker_Beta", count=2)
             for task in beta_tasks:
-                print(f"   ├─ ID: {task['message_id']} | Type: {task['data']['event_type']} from {task['data']['source_node']}")
+                await event_broker.acknowledge_message(task["message_id"])
+                
+            # 3. Simulate a brief time jump window to force message idleness
+            print("⏳ [AUDIT TIME ITERATION]: Simulating check intervals... Scanning for stuck jobs...")
+            await asyncio.sleep(1.0)
+            
+            # 4. Worker_Beta sweeps the Pending Entries List (PEL) to find and claim Alpha's abandoned items
+            hijacked_tasks = await event_broker.audit_and_recover_dead_workers(
+                scanning_consumer="Worker_Beta", 
+                min_idle_time_ms=500  # Low timeout threshold for deterministic simulation runs
+            )
+            
+            print(f"\n🎉 [RECOVERY MATRIX RESULT]: 'Worker_Beta' successfully hijacked {len(hijacked_tasks)} abandoned tasks!")
+            for task in hijacked_tasks:
+                print(f"   ├─ Claimed ID: {task['message_id']} | Type: {task['data']['event_type']}")
+                # Finish processing the hijacked items safely by issuing final acknowledgments
+                await event_broker.acknowledge_message(task["message_id"])
             
     except RuntimeError as lock_err:
         print(f"\n🛑 [ABORT]: Critical concurrency conflict encountered: {lock_err}")
