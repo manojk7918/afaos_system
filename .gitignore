@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 afaos_cache.db
 afaos_audit.db
+vault_storage/backups/*.db
