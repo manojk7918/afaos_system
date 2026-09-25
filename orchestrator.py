@@ -1,13 +1,35 @@
 import os
 import asyncio
 import logging
+import json
 import uuid
 import sqlite3
+from datetime import datetime, timezone
 from redis.asyncio import Redis
-from rate_limiter import DistributedRateLimiter  # Import our Day 33 gatekeeper
+from rate_limiter import DistributedRateLimiter  # Day 33 gatekeeper
 
-# Configure structured logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# --- STRUCTURED JSON LOGGING SETUP ---
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "service": "afaos_orchestrator",
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+        }
+        return json.dumps(log_record)
+
+# Initialize root JSON logging handler
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+# Clear any default handlers to avoid duplicate log entries
+logger.handlers = [handler]
+
 
 class IntegratedOrchestrator:
     def __init__(self, instance_id=None, redis_url=None, db_path=None):
@@ -32,7 +54,7 @@ class IntegratedOrchestrator:
         self.db_conn = sqlite3.connect(self.db_path)
         cursor = self.db_conn.cursor()
         
-        # Match your exact production schema discovered via PRAGMA table_info
+        # Match exact production schema
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS execution_audit_logs (
                 id TEXT PRIMARY KEY,
@@ -67,7 +89,7 @@ class IntegratedOrchestrator:
         try:
             cursor = self.db_conn.cursor()
             
-            # Map incoming Redis stream fields to your exact SQLite schema columns
+            # Map incoming Redis stream fields to exact SQLite schema columns
             workflow_id = payload.get("reference_id", f"WF-{event_id}")
             node_key = payload.get("type", "unknown_txn")
             assigned_agent = f"{node_key}_agent_node"
@@ -98,12 +120,11 @@ class IntegratedOrchestrator:
             logging.info(f"👥 [CONSUMER GROUP ACTIVE]: Group '{group_name}' already exists.")
 
         logging.info("Subscribed to wildcard pattern: afaos:events:*")
-        print("\n🚀 Orchestrator active and parsing transactions. Press [Ctrl + C] to terminate.")
+        logging.info("🚀 Orchestrator active and parsing transactions.")
 
         try:
             while True:
                 # Read stream payloads as a consumer worker node
-                # Using short polling blocks to remain reactive yet gentle on CPU cycles
                 response = await self.redis.xreadgroup(group_name, self.instance_id, {stream_key: ">"}, count=1, block=1000)
                 
                 if response:
@@ -111,8 +132,7 @@ class IntegratedOrchestrator:
                         for msg_id, payload in messages:
                             logging.info(f"📥 Inbound Stream event intercepted: {msg_id}")
                             
-                            # Apply Day 34 Integrated Admission Gatekeeper Control
-                            # Set aggressive limits (max 3 requests per 10 seconds per node) for protection
+                            # Apply Integrated Admission Gatekeeper Control
                             allowed = await self.rate_limiter.is_allowed(client_id=self.instance_id, max_requests=3, window_seconds=10)
                             
                             if allowed:
@@ -154,7 +174,7 @@ async def main():
     try:
         await orchestrator.run_event_listener_loop()
     except KeyboardInterrupt:
-        print("\n👋 Shutdown signal detected via manual keyboard interrupt.")
+        logging.info("Shutdown signal detected via manual keyboard interrupt.")
     finally:
         await orchestrator.close()
 
