@@ -1,0 +1,46 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: afaos_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  orchestrator:
+    build: .
+    container_name: afaos_orchestrator
+    ports:
+      - "8000:8000"
+    command: sh -c "uvicorn metrics:app --host 0.0.0.0 --port 8000 & python3 orchestrator.py"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_PATH=/app/data/afaos_audit.db
+      - TZ=Asia/Kolkata
+    volumes:
+      - sqlite_data:/app/data
+
+  fault_recovery:
+    build: .
+    container_name: afaos_fault_recovery
+    command: python3 fault_recovery.py
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - TZ=Asia/Kolkata
+
+volumes:
+  redis_data:
+  sqlite_data:

@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 import uuid
@@ -9,10 +10,15 @@ from rate_limiter import DistributedRateLimiter  # Import our Day 33 gatekeeper
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class IntegratedOrchestrator:
-    def __init__(self, instance_id=None, redis_url="redis://127.0.0.1:6379", db_path="afaos_audit.db"):
+    def __init__(self, instance_id=None, redis_url=None, db_path=None):
         self.instance_id = instance_id or str(uuid.uuid4())
-        self.redis_url = redis_url
-        self.db_path = db_path
+        
+        # Read environment variables set by Docker-Compose, fallback to localhost for bare-metal
+        redis_host = os.getenv("REDIS_HOST", "127.0.0.1")
+        redis_port = os.getenv("REDIS_PORT", "6379")
+        
+        self.redis_url = redis_url or f"redis://{redis_host}:{redis_port}"
+        self.db_path = db_path or os.getenv("DB_PATH", "afaos_audit.db")
         self.lock_key = "lock:workflow:fa15b023-5e8c-411a-bd63-902fd7b8e1a4"
         
         # Core layers
@@ -40,7 +46,7 @@ class IntegratedOrchestrator:
         """)
         self.db_conn.commit()
 
-        logging.info("Initializing high-concurrency Asynchronous Redis Connection Pools...")
+        logging.info(f"Initializing high-concurrency Asynchronous Redis Connection Pools on {self.redis_url}...")
         self.redis = Redis.from_url(self.redis_url, decode_responses=True)
         
         # Initialize the gatekeeper companion module

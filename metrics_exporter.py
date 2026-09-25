@@ -3,11 +3,15 @@ import logging
 import time
 from redis.asyncio import Redis
 
+# 🎯 GLOBAL CONFIGURATION BLOCKS (Brought to the top)
+REDIS_URL = "redis://127.0.0.1:6379"
+DB_PATH = "afaos_audit.db"  # Ready for when you implement the audit database ledger!
+
 # Configure structured logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class TelemetryMetricsExporter:
-    def __init__(self, redis_url="redis://127.0.0.1:6379"):
+    def __init__(self, redis_url=REDIS_URL): # <-- Uses the global variable now
         self.redis_url = redis_url
         self.redis = None
         self.stream_key = "afaos:stream:event_ledger"
@@ -19,9 +23,7 @@ class TelemetryMetricsExporter:
         logging.info("⚙️ Telemetry Metrics Exporter Engine initialized.")
 
     async def generate_prometheus_metrics(self) -> str:
-        """
-        Scrapes cluster states and formats data into standard Prometheus time-series text notation.
-        """
+        """Scrapes cluster states and formats data into standard Prometheus time-series text notation."""
         metrics_output = []
         timestamp_ms = int(time.time() * 1000)
 
